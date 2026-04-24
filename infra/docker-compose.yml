@@ -1,0 +1,115 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: rag_learning_postgres
+    environment:
+      POSTGRES_DB: rag_learning
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag_learning"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2
+    container_name: rag_learning_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    container_name: rag_learning_api
+    env_file:
+      - ../api/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/rag_learning
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS_RAW: http://localhost:3000,http://127.0.0.1:3000
+      ALLOWED_DATASET_EXTENSIONS_RAW: xlsx,xls,csv
+      ALLOWED_KNOWLEDGE_EXTENSIONS_RAW: pdf,docx,txt,md
+      WATCHFILES_FORCE_POLLING: "true"
+      RAG_TOP_K: "${RAG_TOP_K:-5}"
+      RAG_MAX_DISTANCE: "${RAG_MAX_DISTANCE:-0.6}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY}"
+      OLLAMA_URL: "${OLLAMA_URL:-http://host.docker.internal:11434}"
+      OLLAMA_EMBED_MODEL: "${OLLAMA_EMBED_MODEL:-nomic-embed-text}"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../api:/app/api
+      - ../data:/app/data
+    command: uvicorn api.app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    image: node:20-alpine
+    container_name: rag_learning_web
+    working_dir: /app
+    env_file:
+      - ../web/.env
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../web:/app
+    depends_on:
+      api:
+        condition: service_healthy
+    command: /bin/sh -c "npm install && npm run dev"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: worker/Dockerfile
+    container_name: rag_learning_worker
+    env_file:
+      - ../worker/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/rag_learning
+      OLLAMA_URL: http://host.docker.internal:11434
+      POLL_INTERVAL_SECONDS: 5
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ../worker:/app/worker
+      - ../api:/app/api
+      - ../data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Using watchmedo from watchdog package for hot-reload
+    command: watchmedo auto-restart --debug-force-polling --directory=./worker --pattern="*.py" --recursive -- python -m worker.app.main
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres_data:
+  redis_data:

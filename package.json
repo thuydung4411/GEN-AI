@@ -1,0 +1,14 @@
+{
+  "name": "rag-learning-platform",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "web"
+  ],
+  "scripts": {
+    "web:dev": "npm run dev -w web",
+    "web:build": "npm run build -w web",
+    "web:lint": "npm run lint -w web",
+    "web:test": "npm run test -w web"
+  }
+}
