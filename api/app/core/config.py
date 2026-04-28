@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     
     rag_top_k: int = 5
     rag_max_distance: float = 0.6
+    rag_candidate_k: int = 20
+    rag_distance_margin: float = 0.08
+    rag_max_citation_assets: int = 2
     gemini_api_key: str = ""
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_embed_model: str = "nomic-embed-text"

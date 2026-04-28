@@ -122,7 +122,12 @@ async def process_job(
                 await session.execute(text("UPDATE knowledge_assets SET status = 'processing', updated_at = NOW() WHERE id = :id"), {"id": asset_id})
 
                 logger.info(f"Processing Knowledge Asset {asset_id}")
-                temp_path = os.path.join(settings.storage_local_path, "tmp", str(uuid4()))
+                temp_extension = os.path.splitext(version.storage_path)[1]
+                temp_path = os.path.join(
+                    settings.storage_local_path,
+                    "tmp",
+                    f"{uuid4()}{temp_extension}",
+                )
                 os.makedirs(os.path.dirname(temp_path), exist_ok=True)
                 content = await storage_reader.read(version.storage_path)
                 with open(temp_path, "wb") as f:
@@ -132,6 +137,8 @@ async def process_job(
                     chunks = await knowledge_parser.process_file(
                         temp_path, workspace_id, asset_id, version_id
                     )
+                    if not chunks:
+                        raise ValueError("Knowledge asset produced no chunks to index")
                     await session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.knowledge_version_id == version_id))
                     session.add_all(chunks)
                 finally:
@@ -184,7 +191,8 @@ async def main() -> None:
     knowledge_parser = KnowledgeParser(
         gemini_api_key=settings.gemini_api_key,
         ollama_url=settings.ollama_url,
-        ollama_embed_model=settings.ollama_embed_model
+        ollama_embed_model=settings.ollama_embed_model,
+        gemini_embed_model=settings.gemini_embed_model,
     )
     
     while True:

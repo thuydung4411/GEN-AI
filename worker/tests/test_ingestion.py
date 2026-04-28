@@ -135,7 +135,7 @@ async def test_process_knowledge_happy_path():
         async def __aexit__(self, exc_type, exc_val, exc_tb): pass
         async def scalar(self, stmt):
             class FakeVer:
-                storage_path = "test"
+                storage_path = "test.docx"
             return FakeVer()
         async def execute(self, stmt, params=None):
             self.execute_calls.append(str(stmt).strip())
@@ -144,7 +144,7 @@ async def test_process_knowledge_happy_path():
                     return None
                 def scalar(self):
                     class FakeVer:
-                        storage_path = "test"
+                        storage_path = "test.docx"
                     return FakeVer()
             return MockRes()
         def add_all(self, items):
@@ -156,8 +156,11 @@ async def test_process_knowledge_happy_path():
     async def mock_read(path): return b"test pdf content"
     storage.read = mock_read
     
+    captured_file_paths = []
+
     class MockKnowledgeParser:
         async def process_file(self, *args, **kwargs):
+            captured_file_paths.append(args[0])
             from api.app.models.entities import KnowledgeChunk
             from uuid import uuid4
             return [KnowledgeChunk(id=uuid4(), knowledge_version_id=kwargs.get("knowledge_version_id"), chunk_index=0, content="test", metadata_json={})]
@@ -184,8 +187,64 @@ async def test_process_knowledge_happy_path():
     assert any("DELETE FROM knowledge_chunks WHERE" in call for call in session_maker.execute_calls)
     # Assert chunks added
     assert len(session_maker.added_items) == 1
+    assert captured_file_paths and captured_file_paths[0].endswith(".docx")
     # Assert ready state
     assert any("UPDATE assets SET status = 'ready'" in call for call in session_maker.execute_calls)
     assert any("UPDATE knowledge_assets SET status = 'ready'" in call for call in session_maker.execute_calls)
     assert any("UPDATE ingestion_jobs SET status = 'ready'" in call for call in session_maker.execute_calls)
 
+@pytest.mark.anyio
+async def test_process_knowledge_fails_on_empty_chunks():
+    from worker.app.main import process_job
+    from worker.app.services.storage import StorageReader
+
+    import tempfile
+
+    class MockSettings:
+        storage_local_path = tempfile.gettempdir()
+
+    class TrackingSession:
+        def __init__(self):
+            self.execute_calls = []
+        def __call__(self): return self
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc_val, exc_tb): pass
+        async def scalar(self, stmt):
+            class FakeVer:
+                storage_path = "test"
+            return FakeVer()
+        async def execute(self, stmt, params=None):
+            self.execute_calls.append(str(stmt).strip())
+            class MockRes:
+                def scalar_one_or_none(self):
+                    return None
+            return MockRes()
+        def add_all(self, items):
+            raise AssertionError("Knowledge chunks should not be added when parser returns empty output")
+        async def commit(self): pass
+        async def rollback(self): pass
+
+    storage = StorageReader(None)
+    async def mock_read(path): return b"test docx content"
+    storage.read = mock_read
+
+    class MockKnowledgeParser:
+        async def process_file(self, *args, **kwargs):
+            return []
+
+    job_info = {
+        "id": "job1",
+        "asset_id": "doc1",
+        "asset_version_id": "ver1",
+        "asset_kind": AssetKind.knowledge,
+        "knowledge_asset_id": "doc1",
+        "knowledge_version_id": "ver1",
+        "workspace_id": "ws1"
+    }
+
+    session_maker = TrackingSession()
+    await process_job(MockSettings(), job_info, session_maker, storage, None, MockKnowledgeParser())
+
+    assert any("UPDATE ingestion_jobs SET status = 'failed'" in call for call in session_maker.execute_calls)
+    assert any("UPDATE assets SET status = 'failed'" in call for call in session_maker.execute_calls)
+    assert any("UPDATE knowledge_assets SET status = 'failed'" in call for call in session_maker.execute_calls)

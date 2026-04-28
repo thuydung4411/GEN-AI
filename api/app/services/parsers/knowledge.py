@@ -1,20 +1,27 @@
 import os
-from pathlib import Path
 from uuid import UUID, uuid4
 from typing import Any
 import docx
 # from pypdf import PdfReader # Moved to lazy import
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from google import genai
+from google.genai import types
 import httpx
 
 from api.app.models.entities import KnowledgeChunk
 
 class KnowledgeParser:
-    def __init__(self, gemini_api_key: str | None = None, ollama_url: str | None = None, ollama_embed_model: str = "nomic-embed-text"):
+    def __init__(
+        self,
+        gemini_api_key: str | None = None,
+        ollama_url: str | None = None,
+        ollama_embed_model: str = "nomic-embed-text",
+        gemini_embed_model: str = "gemini-embedding-001",
+    ):
         self.gemini_api_key = gemini_api_key
         self.ollama_url = ollama_url
         self.ollama_embed_model = ollama_embed_model
+        self.gemini_embed_model = gemini_embed_model
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=100,
@@ -24,19 +31,37 @@ class KnowledgeParser:
         if self.gemini_api_key:
             self.client = genai.Client(api_key=self.gemini_api_key)
 
+    def _extract_docx_text(self, file_path: str) -> str:
+        doc = docx.Document(file_path)
+
+        blocks: list[str] = []
+
+        paragraph_texts = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+        if paragraph_texts:
+            blocks.extend(paragraph_texts)
+
+        for table in doc.tables:
+            row_texts: list[str] = []
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
+                if cells:
+                    row_texts.append(" | ".join(cells))
+            if row_texts:
+                blocks.append("\n".join(row_texts))
+
+        return "\n\n".join(blocks)
+
     def parse_and_chunk(self, file_path: str) -> list[dict[str, Any]]:
         extension = os.path.splitext(file_path)[1].lower()
         full_text = ""
-        metadata = {}
 
         if extension == ".pdf":
             from pypdf import PdfReader
             reader = PdfReader(file_path)
-            for page_num, page in enumerate(reader.pages):
-                full_text += page.extract_text() + "\n"
+            for page in reader.pages:
+                full_text += (page.extract_text() or "") + "\n"
         elif extension == ".docx":
-            doc = docx.Document(file_path)
-            full_text = "\n".join([p.text for p in doc.paragraphs])
+            full_text = self._extract_docx_text(file_path)
         elif extension in [".txt", ".md"]:
             with open(file_path, "r", encoding="utf-8") as f:
                 full_text = f.read()
@@ -57,8 +82,9 @@ class KnowledgeParser:
             for i in range(0, len(texts), batch_size):
                 batch = texts[i:i + batch_size]
                 result = self.client.models.embed_content(
-                    model="text-embedding-004",
-                    contents=batch
+                    model=self.gemini_embed_model,
+                    contents=batch,
+                    config=types.EmbedContentConfig(output_dimensionality=768),
                 )
                 embeddings.extend([e.values for e in result.embeddings])
             return embeddings
@@ -89,8 +115,8 @@ class KnowledgeParser:
     ) -> list[KnowledgeChunk]:
         chunk_data = self.parse_and_chunk(file_path)
         if not chunk_data:
-            return []
-            
+            raise ValueError("Knowledge asset produced no extractable text chunks")
+             
         embeddings = await self.generate_embeddings(chunk_data)
         
         knowledge_chunks = []

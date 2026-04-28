@@ -10,6 +10,7 @@ from api.app.db.base import Base
 engine = None
 SessionLocal = None
 engine_loop_id = None
+initialized_database_urls: set[str] = set()
 
 
 def get_engine():
@@ -95,11 +96,17 @@ async def _apply_sql_migrations(connection) -> None:
 async def init_database() -> None:
     from api.app.models import entities  # noqa: F401
 
+    settings = get_settings()
+    if settings.database_url in initialized_database_urls:
+        return
+
     current_engine = get_engine()
     async with current_engine.begin() as connection:
         await _ensure_postgres_extensions(connection)
         await connection.run_sync(Base.metadata.create_all)
         await _apply_sql_migrations(connection)
+
+    initialized_database_urls.add(settings.database_url)
 
 
 async def close_database() -> None:

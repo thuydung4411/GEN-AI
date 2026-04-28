@@ -17,7 +17,7 @@ const API_BASE_URL =
 const MODELS = [
   { id: "llama3.2:1b", name: "Llama 3.2 (1B)" },
   { id: "gemma3:4b", name: "Gemma 3 (4B)" },
-  { id: "gemini-1.5-flash-latest", name: "Gemini 1.5 Flash" },
+  { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
 ];
 
 export default function ChatView() {

@@ -88,11 +88,16 @@ class ChatService:
                     final_meta = meta
                     yield "", meta, assistant_msg.id
                     
-            # Finalize
+            final_status = (
+                MessageStatus.failed
+                if final_meta and final_meta.get("error")
+                else MessageStatus.completed
+            )
+
             await self._chat_repository.update_message(
                 message_id=assistant_msg.id,
                 content=full_content,
-                status=MessageStatus.completed,
+                status=final_status,
                 metadata_json=final_meta
             )
             

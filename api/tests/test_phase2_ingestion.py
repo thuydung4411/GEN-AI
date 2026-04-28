@@ -67,6 +67,26 @@ def test_tabular_parser_excel(temp_storage):
     
     parser.delete_materialization(workspace_id, dataset_id)
 
+def test_knowledge_parser_docx_table_only(temp_storage):
+    from docx import Document
+
+    parser = KnowledgeParser(gemini_api_key=None)
+    docx_path = os.path.join(temp_storage, "table-only.docx")
+
+    document = Document()
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Hạng mục"
+    table.cell(0, 1).text = "Kết quả"
+    table.cell(1, 0).text = "Thu hồi chứng chỉ"
+    table.cell(1, 1).text = "Thành công"
+    document.save(docx_path)
+
+    chunk_data = parser.parse_and_chunk(docx_path)
+
+    assert len(chunk_data) > 0
+    assert "Thu hồi chứng chỉ" in chunk_data[0]["content"]
+    assert "Thành công" in chunk_data[0]["content"]
+
 @pytest.mark.asyncio
 async def test_knowledge_parser_mock(temp_storage):
     # Test with no API key (mock/dummy mode)
@@ -83,3 +103,29 @@ async def test_knowledge_parser_mock(temp_storage):
     assert len(chunks) > 0
     assert chunks[0].content.startswith("Hello world.")
     assert len(chunks[0].embedding) == 768
+
+@pytest.mark.asyncio
+async def test_knowledge_parser_gemini_uses_supported_model_and_dimension():
+    parser = KnowledgeParser(gemini_api_key="test-key")
+
+    captured: dict[str, object] = {}
+
+    class FakeEmbedding:
+        def __init__(self, values):
+            self.values = values
+
+    class FakeModels:
+        def embed_content(self, *, model, contents, config):
+            captured["model"] = model
+            captured["contents"] = contents
+            captured["config"] = config
+            return type("FakeResult", (), {"embeddings": [FakeEmbedding([0.2] * 768)]})()
+
+    parser.client = type("FakeClient", (), {"models": FakeModels()})()
+
+    embeddings = await parser.generate_embeddings([{"content": "hello world", "index": 0}])
+
+    assert captured["model"] == "gemini-embedding-001"
+    assert captured["contents"] == ["hello world"]
+    assert captured["config"].output_dimensionality == 768
+    assert len(embeddings[0]) == 768

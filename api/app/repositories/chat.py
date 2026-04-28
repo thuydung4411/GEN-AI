@@ -9,6 +9,10 @@ from sqlalchemy.orm import selectinload
 from api.app.models.entities import ChatSession, ChatMessage, MessageRole, MessageStatus
 from api.app.repositories.interfaces import ChatRepository, ChatSessionRecord, ChatMessageRecord
 
+
+def _enum_value(value: str | MessageRole | MessageStatus) -> str:
+    return getattr(value, "value", value)
+
 @dataclass
 class ChatMessageRecord:
     id: uuid.UUID
@@ -66,9 +70,9 @@ class SqlAlchemyChatRepository(ChatRepository):
             ChatMessageRecord(
                 id=m.id,
                 session_id=m.session_id,
-                role=m.role.value,
+                role=_enum_value(m.role),
                 content=m.content,
-                status=m.status.value,
+                status=_enum_value(m.status),
                 model_name=m.model_name,
                 retrieval_used=m.retrieval_used,
                 metadata_json=m.metadata_json,
@@ -135,9 +139,9 @@ class SqlAlchemyChatRepository(ChatRepository):
         return ChatMessageRecord(
             id=msg.id,
             session_id=msg.session_id,
-            role=msg.role.value,
+            role=_enum_value(msg.role),
             content=msg.content,
-            status=msg.status.value,
+            status=_enum_value(msg.status),
             model_name=msg.model_name,
             retrieval_used=msg.retrieval_used,
             metadata_json=msg.metadata_json,
@@ -167,9 +171,9 @@ class SqlAlchemyChatRepository(ChatRepository):
         return ChatMessageRecord(
             id=msg.id,
             session_id=msg.session_id,
-            role=msg.role.value,
+            role=_enum_value(msg.role),
             content=msg.content,
-            status=msg.status.value,
+            status=_enum_value(msg.status),
             model_name=msg.model_name,
             retrieval_used=msg.retrieval_used,
             metadata_json=msg.metadata_json,
