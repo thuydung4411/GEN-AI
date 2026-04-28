@@ -2,6 +2,7 @@ node_modules/
 .next/
 dist/
 coverage/
+*.tsbuildinfo
 *.pyc
 __pycache__/
 .pytest_cache/

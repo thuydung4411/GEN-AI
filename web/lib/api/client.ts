@@ -1,5 +1,8 @@
 import { createSupabaseBrowserClient } from "../supabase/browser";
 
+export type AssetKind = "dataset" | "knowledge";
+export type AssetStatus = "pending" | "processing" | "ready" | "failed";
+
 type DatasetVersionSummary = {
   id: string;
   version_number: number;
@@ -9,9 +12,15 @@ type DatasetVersionSummary = {
 
 export type JobSummary = {
   id: string;
-  status: "pending" | "processing" | "ready" | "failed";
+  status: AssetStatus;
   created_at: string;
   updated_at: string;
+};
+
+export type AssetJobSummary = {
+  id: string;
+  status: AssetStatus;
+  error_message: string | null;
 };
 
 export type DatasetListItem = {
@@ -20,7 +29,7 @@ export type DatasetListItem = {
   title: string;
   original_filename: string;
   mime_type: string;
-  status: "pending" | "processing" | "ready" | "failed";
+  status: AssetStatus;
   created_at: string;
   updated_at: string;
   latest_version: DatasetVersionSummary | null;
@@ -29,20 +38,45 @@ export type DatasetListItem = {
 
 export type UploadAssetResponse = {
   asset_id: string;
-  kind: "dataset" | "knowledge";
+  kind: AssetKind;
   job_id: string;
-  status: string;
+  status: AssetStatus;
 };
 
 export type AssetListItem = {
   id: string;
-  kind: "dataset" | "knowledge";
+  kind: AssetKind;
   title: string;
   original_filename: string;
-  status: "pending" | "processing" | "ready" | "failed";
+  status: AssetStatus;
   created_at: string;
   updated_at: string;
-  latest_job: JobSummary | null;
+  latest_job: AssetJobSummary | null;
+};
+
+export type AssetVersionSummary = {
+  id: string;
+  version_number: number;
+  storage_path: string;
+  file_size_bytes: number;
+  created_at: string;
+};
+
+export type AssetDetail = AssetListItem & {
+  mime_type: string;
+  latest_version: AssetVersionSummary | null;
+};
+
+export type AssetPreviewResponse = {
+  asset_id: string;
+  kind: AssetKind;
+  preview_data: Record<string, unknown>[];
+};
+
+export type AssetProfileResponse = {
+  asset_id: string;
+  kind: AssetKind;
+  profile_data: Record<string, unknown>;
 };
 
 const API_BASE_URL =
@@ -89,6 +123,21 @@ export async function listAssets() {
   return payload.items;
 }
 
+export async function getAsset(assetId: string) {
+  const response = await apiFetch(`/v1/assets/${assetId}`);
+  return (await response.json()) as AssetDetail;
+}
+
+export async function getAssetPreview(assetId: string) {
+  const response = await apiFetch(`/v1/assets/${assetId}/preview`);
+  return (await response.json()) as AssetPreviewResponse;
+}
+
+export async function getAssetProfile(assetId: string) {
+  const response = await apiFetch(`/v1/assets/${assetId}/profile`);
+  return (await response.json()) as AssetProfileResponse;
+}
+
 export async function listDatasets() {
   // Use facade and filter/map to maintain legacy type if needed,
   // but better to just use the facade data.
@@ -115,8 +164,8 @@ export async function uploadDataset(file: File) {
   const res = await uploadAsset(file);
   // Map to legacy response structure if needed by components
   return {
-    dataset: { id: res.asset_id, status: res.status } as any,
-    job: { id: res.job_id, status: res.status } as any,
+    dataset: { id: res.asset_id, status: res.status },
+    job: { id: res.job_id, status: res.status },
   };
 }
 
@@ -176,7 +225,7 @@ export type KnowledgeListItem = {
   title: string;
   original_filename: string;
   mime_type: string;
-  status: "pending" | "processing" | "ready" | "failed";
+  status: AssetStatus;
   created_at: string;
   updated_at: string;
   latest_version: KnowledgeVersionSummary | null;
@@ -198,7 +247,7 @@ export async function listKnowledge() {
 
 export async function uploadKnowledge(file: File) {
   const res = await uploadAsset(file);
-  return { id: res.asset_id, status: res.status } as any;
+  return { id: res.asset_id, status: res.status };
 }
 
 export async function deleteKnowledge(assetId: string) {
