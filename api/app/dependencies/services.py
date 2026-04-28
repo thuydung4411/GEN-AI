@@ -82,5 +82,6 @@ def get_asset_service(
     repo: AssetRepository = Depends(get_asset_repository),
     dataset_service: DatasetService = Depends(get_dataset_service),
     knowledge_service: KnowledgeService = Depends(get_knowledge_service),
+    settings: Settings = Depends(get_settings),
 ) -> AssetService:
-    return AssetService(repo, dataset_service, knowledge_service)
+    return AssetService(repo, dataset_service, knowledge_service, settings)

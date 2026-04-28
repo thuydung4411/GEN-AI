@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, UploadFile, status
 
+from api.app.core.config import Settings
 from api.app.repositories.interfaces import AssetRepository, AuthenticatedUser
 from api.app.schemas.assets import (
     AssetSummary, 
@@ -25,10 +26,12 @@ class AssetService:
         repository: AssetRepository,
         dataset_service: DatasetService,
         knowledge_service: KnowledgeService,
+        settings: Settings,
     ):
         self._repository = repository
         self._dataset_service = dataset_service
         self._knowledge_service = knowledge_service
+        self._settings = settings
 
     async def list_assets(self, current_user: AuthenticatedUser) -> list[AssetSummary]:
         workspace = await self._repository.ensure_workspace_for_user(
@@ -57,16 +60,17 @@ class AssetService:
     async def upload_asset(self, current_user: AuthenticatedUser, file: UploadFile) -> UploadAssetResponse:
         extension = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
         
-        # Decide lane based on extension
-        # Legacy set: xlsx, xls, csv
-        dataset_exts = {"xlsx", "xls", "csv"}
-        
-        if extension in dataset_exts:
+        if extension in self._settings.allowed_dataset_extensions:
             asset, job = await self._dataset_service.create_pending_dataset(current_user, file)
             kind = AssetKind.dataset
-        else:
+        elif extension in self._settings.allowed_knowledge_extensions:
             asset, job = await self._knowledge_service.create_knowledge_asset(current_user, file)
             kind = AssetKind.knowledge
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported asset file type '.{extension or 'unknown'}'.",
+            )
 
         return UploadAssetResponse(
             asset_id=asset.id,
