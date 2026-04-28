@@ -1,6 +1,6 @@
 import pytest
 from worker.app.services.parser import DatasetParser
-from api.app.models.entities import AssetKind, JobStatus
+from api.app.models.entities import AssetKind
 
 def test_parse_empty_text():
     parser = DatasetParser()
@@ -36,15 +36,97 @@ def test_chunker_includes_workspace_safety(monkeypatch):
     assert chunks[0].chunk_index == 0
     assert chunks[-1].chunk_index == len(chunks) - 1
 
+
+@pytest.mark.anyio
+async def test_claim_next_job_uses_only_generic_asset_fields():
+    from worker.app.main import claim_next_job
+
+    class MockResult:
+        def fetchone(self):
+            return None
+
+    class MockSession:
+        sql = ""
+
+        async def execute(self, stmt, params=None):
+            self.sql = str(stmt)
+            return MockResult()
+
+        async def commit(self):
+            pass
+
+    session = MockSession()
+    assert await claim_next_job(session) is None
+    assert "RETURNING id, asset_id, asset_version_id, asset_kind, workspace_id" in session.sql
+    assert "dataset_id" not in session.sql
+    assert "knowledge_asset_id" not in session.sql
+
+
+@pytest.mark.anyio
+async def test_process_dataset_happy_path_preserves_file_extension():
+    from worker.app.main import process_job
+    from worker.app.services.storage import StorageReader
+
+    import tempfile
+
+    class MockSettings:
+        storage_local_path = tempfile.gettempdir()
+
+    class TrackingSession:
+        def __init__(self):
+            self.execute_calls = []
+            self.added_items = []
+        def __call__(self): return self
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc_val, exc_tb): pass
+        async def scalar(self, stmt):
+            class FakeVer:
+                storage_path = "table.csv"
+            return FakeVer()
+        async def execute(self, stmt, params=None):
+            self.execute_calls.append(str(stmt).strip())
+            class MockRes:
+                pass
+            return MockRes()
+        def add_all(self, items):
+            self.added_items.extend(items)
+        async def commit(self): pass
+
+    storage = StorageReader(None)
+    async def mock_read(path): return b"a,b\n1,2"
+    storage.read = mock_read
+
+    captured_file_paths = []
+
+    class MockTabularParser:
+        def parse_and_materialize(self, file_path, *args):
+            captured_file_paths.append(file_path)
+            return ["sheet"], ["profile"]
+
+    job_info = {
+        "id": "job1",
+        "asset_id": "asset1",
+        "asset_version_id": "version1",
+        "asset_kind": "dataset",
+        "workspace_id": "workspace1"
+    }
+
+    session_maker = TrackingSession()
+    await process_job(MockSettings(), job_info, session_maker, storage, MockTabularParser(), None)
+
+    assert captured_file_paths and captured_file_paths[0].endswith(".csv")
+    assert len(session_maker.added_items) == 2
+    assert any("DELETE FROM dataset_sheets WHERE" in call for call in session_maker.execute_calls)
+    assert any("DELETE FROM column_profiles WHERE" in call for call in session_maker.execute_calls)
+    assert any("UPDATE datasets SET status = 'processing'" in call for call in session_maker.execute_calls)
+    assert any("UPDATE datasets SET status = 'ready'" in call for call in session_maker.execute_calls)
+    assert any("UPDATE ingestion_jobs SET status = 'ready'" in call for call in session_maker.execute_calls)
+
 @pytest.mark.anyio
 async def test_process_job_fail_on_empty_dataset():
     # We can mock the DB session and Embedder
     from worker.app.main import process_job
     from worker.app.services.storage import StorageReader
-    import copy
-    
-    class MockEngine:
-        pass
         
     class MockSessionMaker:
         def __call__(self):
@@ -91,8 +173,6 @@ async def test_process_job_fail_on_empty_dataset():
         "asset_id": "doc1",
         "asset_version_id": "ver1",
         "asset_kind": AssetKind.dataset,
-        "dataset_id": "doc1",
-        "dataset_version_id": "ver1",
         "workspace_id": "ws1"
     }
     
@@ -163,15 +243,13 @@ async def test_process_knowledge_happy_path():
             captured_file_paths.append(args[0])
             from api.app.models.entities import KnowledgeChunk
             from uuid import uuid4
-            return [KnowledgeChunk(id=uuid4(), knowledge_version_id=kwargs.get("knowledge_version_id"), chunk_index=0, content="test", metadata_json={})]
+            return [KnowledgeChunk(id=uuid4(), knowledge_version_id=args[3], chunk_index=0, content="test", metadata_json={})]
             
     job_info = {
         "id": "job1",
         "asset_id": "doc1",
         "asset_version_id": "ver1",
         "asset_kind": AssetKind.knowledge,
-        "knowledge_asset_id": "doc1",
-        "knowledge_version_id": "ver1",
         "workspace_id": "ws1"
     }
 
@@ -181,7 +259,7 @@ async def test_process_knowledge_happy_path():
 
     
     # Assert processing state
-    assert any("UPDATE assets SET status = 'processing'" in call for call in session_maker.execute_calls)
+    assert any("UPDATE assets SET status = :status" in call for call in session_maker.execute_calls)
     assert any("UPDATE knowledge_assets SET status = 'processing'" in call for call in session_maker.execute_calls)
     # Assert idempotency cleanup
     assert any("DELETE FROM knowledge_chunks WHERE" in call for call in session_maker.execute_calls)
@@ -189,7 +267,7 @@ async def test_process_knowledge_happy_path():
     assert len(session_maker.added_items) == 1
     assert captured_file_paths and captured_file_paths[0].endswith(".docx")
     # Assert ready state
-    assert any("UPDATE assets SET status = 'ready'" in call for call in session_maker.execute_calls)
+    assert any("UPDATE assets SET status = :status" in call for call in session_maker.execute_calls)
     assert any("UPDATE knowledge_assets SET status = 'ready'" in call for call in session_maker.execute_calls)
     assert any("UPDATE ingestion_jobs SET status = 'ready'" in call for call in session_maker.execute_calls)
 
@@ -237,8 +315,6 @@ async def test_process_knowledge_fails_on_empty_chunks():
         "asset_id": "doc1",
         "asset_version_id": "ver1",
         "asset_kind": AssetKind.knowledge,
-        "knowledge_asset_id": "doc1",
-        "knowledge_version_id": "ver1",
         "workspace_id": "ws1"
     }
 
@@ -246,5 +322,5 @@ async def test_process_knowledge_fails_on_empty_chunks():
     await process_job(MockSettings(), job_info, session_maker, storage, None, MockKnowledgeParser())
 
     assert any("UPDATE ingestion_jobs SET status = 'failed'" in call for call in session_maker.execute_calls)
-    assert any("UPDATE assets SET status = 'failed'" in call for call in session_maker.execute_calls)
+    assert any("UPDATE assets SET status = :status" in call for call in session_maker.execute_calls)
     assert any("UPDATE knowledge_assets SET status = 'failed'" in call for call in session_maker.execute_calls)
